@@ -1,0 +1,364 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Crypto Trading Quiz</title>
+    <meta name="description" content="Prove your trading edge with funding/OI/on-chain quiz.">
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/html-to-image@1.11.11/dist/html-to-image.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      body { -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+    </style>
+  </head>
+  <body class="min-h-screen bg-gradient-to-b from-slate-950 via-slate-900 to-black text-slate-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useMemo, useRef, useState } = React;
+
+      // ---------- Question Bank: unambiguous options -----------------------------
+      const QUESTION_BANK = [
+        { q: "펀딩비가 고르게 +0.05%/8h 이상으로 치솟고 OI(미결제약정)가 급증하는데 가격이 횡보/약상승일 때, 통상적으로 가장 경계해야 할 시나리오는?",
+          options: ["롱 스퀴즈", "숏 스퀴즈", "롱 스윕(롱 청산)", "변동성 축소"], a: 2,
+          explain: "양(+) 펀딩과 OI 동시증가는 레버리지 롱 누적. 가격이 못 오르면 롱 스윕(롱 청산 유도) 위험이 커집니다." },
+        { q: "펀딩이 음(-)으로 깊어지고 OI가 급증하며 가격이 천천히 올라갈 때 가장 가능성이 높은 해석은?",
+          options: ["롱 과열", "숏 커버(숏 청산)", "유동성 고갈", "현물 매도"], a: 1,
+          explain: "음(–) 펀딩+OI↑는 숏 누적. 가격이 버티며 상승하면 커버링에 의한 숏 스퀴즈가 자주 발생합니다." },
+        { q: "선물-현물 베이시스(컨탱고)가 과도하게 확대될 때 가장 보편적인 중립 전략은?",
+          options: ["현물 롱+선물 숏", "선물 롱", "현물 숏", "옵션 매수"], a: 0,
+          explain: "컨탱고 확대는 캐리 트레이드 기회(현물 롱/선물 숏)입니다." },
+        { q: "가격이 급락하는 동안 OI가 동반 급감하면 보통 무엇을 의미하나요?",
+          options: ["신규 숏 유입", "숏 청산/커버", "현물 매수 증가", "펀딩 안정"], a: 1,
+          explain: "가격 하락 구간에서 OI가 줄면 포지션 축소가 주도. 숏의 이익실현 커버(숏 청산) 비중이 크다는 해석을 우선합니다." },
+        { q: "펀딩은 +, OI는 횡보, 가격은 급등일 때 어떤 위험이 커질 수 있나?",
+          options: ["롱 스퀴즈(롱 청산)", "숏 스퀴즈(숏 청산)", "거래정지", "OI 붕괴"], a: 1,
+          explain: "OI가 늘지 않는데 가격이 급등하면 숏 커버가 가격을 밀어올리는 숏 스퀴즈 강화 신호일 수 있습니다." },
+        { q: "대형 거래소들의 청산 히트맵(레버리지 분포)을 볼 때, 숏 청산 밀집 구역 위로 천천히 가격이 접근할 경우 전술적으로 적절한 플레이는?",
+          options: ["직전 롱 청산", "돌파 롱(리스크 한정)", "즉시 숏 추가", "관망"], a: 1,
+          explain: "청산 클러스터 상단 돌파는 체인 트리거로 모멘텀 발생. 단, 손절 한정 필수." },
+        { q: "CVD(누적 체결 델타)가 상승하지만 가격이 횡보/하락한다면 1차적으로 의심할 신호는?",
+          options: ["스폿 매수 우세", "파생 프런트런", "흡수/패시브 공급", "거래 정지"], a: 2,
+          explain: "체결은 매수 우세인데 가격이 정체면 상단의 대기 물량이 흡수 중일 수 있습니다." },
+        { q: "거래소 간 펀딩 스프레드가 벌어져, 바이낸스는 +0.05%, OKX는 0 근처, Bybit은 +0.02%일 때 마켓메이커의 전형적인 대응은?",
+          options: ["높은곳 숏·낮은곳 롱", "낮은곳 숏·높은곳 롱", "동일방향 유지", "낮은곳만 청산"], a: 0,
+          explain: "펀딩 높은 거래소에서 숏, 낮은 거래소에서 롱으로 펀딩차 아비트라지." },
+        { q: "스테이블코인 순발행량(유통량)이 수 주간 증가 추세일 때 일반적으로 기대할 수 있는 방향성은?",
+          options: ["현물 매도 압력", "유동성 확대→위험자산↑", "거래 정지", "헤지 수요↑"], a: 1,
+          explain: "스테이블 유통 증가=마켓 크레딧 확장 신호로 위험자산 선호와 동행." },
+        { q: "거래소 순유입(Netflow)이 단기간 급증하고 가격이 하락할 때 1차 해석은?",
+          options: ["현물 매수 대기", "현물 매도 대기", "수수료 인하", "채굴자 축적"], a: 1,
+          explain: "순유입 급증은 공급 증가 신호로 단기 하방 리스크." },
+        { q: "MVRV나 SOPR>1이 지속되면서도 파생 OI가 줄지 않는 상승장에서 경계할 것은?",
+          options: ["추가 모멘텀", "체인 혼잡", "롱 청산 급락", "거래량 감소"], a: 2,
+          explain: "이익 실현 압력과 레버리지 유지가 겹치면 위로 흔든 뒤 롱 청산 급락 리스크." },
+        { q: "펀딩 +, OI 증가, 현물 프리미엄(현물>선물)까지 동반될 때 가장 일관된 판단은?",
+          options: ["롱 과열", "숏 과열", "중립", "정지"], a: 0,
+          explain: "현물 강세+양 펀딩+OI↑는 레버리지 과열 신호. 사이징 보수적." },
+        { q: "가격은 고점을 갱신하나 OI가 줄어든다면?",
+          options: ["레버↑", "현물/현금 주도", "롱 과열", "숏 과열"], a: 1,
+          explain: "레버리지 유입이 아닌 현물/현금 플로우 주도 랠리일 가능성." },
+        { q: "대형 이벤트 전 델타-중립(캐리/헤지) 포지션의 핵심 관리 포인트는?",
+          options: ["펀딩·베이시스", "수수료", "테마", "색상"], a: 0,
+          explain: "펀딩/베이시스 변동과 실행 슬리피지가 수익률을 좌우." },
+        { q: "DEX 풀 유동성이 얕은 알트에서 온체인 대량 매수 체인이 포착될 때 위험은?",
+          options: ["MEV/리프라이스", "슬리피지 0", "가스비 하락", "체결 보장"], a: 0,
+          explain: "얕은 풀은 가격 영향 커서 리프라이스와 MEV 리스크가 큼." },
+        { q: "선물 마크가격이 현물보다 높고 펀딩도 +일 때, 스캘프 관점의 합리적 접근은?",
+          options: ["현물 롱·선물 숏", "선물 롱", "현물 숏", "무시"], a: 0,
+          explain: "오버슈트+양 펀딩은 캐리 기회 또는 롱 부담 구간." },
+        { q: "강한 상승 후 펀딩이 0에 수렴하고 OI가 유지될 때 무엇을 시사?",
+          options: ["재헤지/밸런싱", "롱 과열", "약세 전환", "정지"], a: 0,
+          explain: "추격 레버 정리 후 포지션이 중립화. 추세 지속 여지." },
+        { q: "토큰 언락 직전 파생시장에서 합리적인 기본 가정은?",
+          options: ["공급 증가 위험", "공급 감소", "OI 급감 확정", "가격 급등 확정"], a: 0,
+          explain: "공급 증가 이벤트는 베이시스/펀딩 왜곡을 유발. 체크 필수." },
+        { q: "바이낸스 펀딩↑, OKX OI↑라면 마켓메이커의 중립 포지션은?",
+          options: ["바낸 숏·OKX 롱", "양쪽 숏", "양쪽 롱", "무시"], a: 0,
+          explain: "펀딩 높은 곳 숏, OI 유입 강한 곳 롱으로 균형." },
+        { q: "ETH 상승+펀딩+, LP가 직면할 주요 리스크와 대응은?",
+          options: ["IL 확대·델타 헷지", "펀딩 손실", "수수료 감소", "손익 동결"], a: 0,
+          explain: "상승 구간 LP는 IL이 커지므로 선물 숏/옵션으로 델타 헷지." }
+      ];
+
+      // ---------- Card Levels (Korean labels) ------------------------------------
+      const LEVELS = [
+        { key: "rookie",  label: "방구석 트레이더",   min: 0,  max: 29,
+          displayTitle: "방구석 트레이더",
+          flavor: "마켓과 아직 썸타는 단계. 감보다 데이터.", 
+          gradient: "from-slate-800 via-slate-700 to-slate-900" },
+        { key: "scalp",   label: "여의도 증권사 신입", min: 30, max: 49,
+          displayTitle: "여의도 증권사 신입",
+          flavor: "펀딩·OI 체크하며 기본기 다지는 구간.",
+          gradient: "from-indigo-700 via-blue-600 to-indigo-900" },
+        { key: "swing",   label: "프로 트레이더",     min: 50, max: 69,
+          displayTitle: "프로 트레이더",
+          flavor: "베이시스·CVD로 흐름의 질을 본다.",
+          gradient: "from-purple-700 via-fuchsia-600 to-purple-900" },
+        { key: "risk",    label: "헤지펀드 리스크 매니저", min: 70, max: 89,
+          displayTitle: "헤지펀드 리스크 매니저",
+          flavor: "현물·파생·온체인을 구조적으로 묶는다.",
+          gradient: "from-emerald-600 via-teal-600 to-emerald-900" },
+        { key: "wizard",  label: "골드만삭스 프랍데스크", min: 90, max: 100,
+          displayTitle: "골드만삭스 프랍데스크",
+          flavor: "유동성의 속삭임을 먼저 듣는 사람.",
+          gradient: "from-amber-500 via-orange-600 to-rose-600" },
+      ];
+
+      function levelOf(scorePct) {
+        return LEVELS.find(l => scorePct >= l.min && scorePct <= l.max) || LEVELS[0];
+      }
+
+      function LevelArt({levelKey}) {
+        if (levelKey === "rookie") {
+          return (
+            <svg viewBox="0 0 220 120" className="w-48 h-28 mx-auto opacity-95">
+              <g stroke="rgba(255,255,255,0.25)">
+                {Array.from({length:5}).map((_,i)=>(<line key={i} x1="0" y1={20+i*20} x2="220" y2={20+i*20}/>))}
+              </g>
+              <path d="M10 90 L40 85 L70 88 L100 80 L130 83 L160 78 L190 74" fill="none" stroke="#fff" strokeWidth="2"/>
+              <circle cx="190" cy="74" r="3" fill="#fff"/>
+            </svg>
+          );
+        }
+        if (levelKey === "scalp") {
+          return (
+            <svg viewBox="0 0 220 120" className="w-48 h-28 mx-auto opacity-95">
+              <g stroke="rgba(255,255,255,0.25)">
+                {Array.from({length:5}).map((_,i)=>(<line key={i} x1="0" y1={20+i*20} x2="220" y2={20+i*20}/>))}
+              </g>
+              {[
+                {x:30,o:90,c:80,h:95,l:70},
+                {x:60,o:78,c:92,h:98,l:74},
+                {x:90,o:94,c:86,h:100,l:82},
+                {x:120,o:84,c:96,h:102,l:80},
+                {x:150,o:95,c:88,h:104,l:85},
+                {x:180,o:90,c:100,h:108,l:88},
+              ].map((d,i)=> (
+                <g key={i} stroke="#fff" strokeOpacity="0.95">
+                  <line x1={d.x} x2={d.x} y1={d.h} y2={d.l} />
+                  <rect x={d.x-6} y={Math.min(d.o,d.c)} width="12" height={Math.max(4,Math.abs(d.o-d.c))} fill="#fff" fillOpacity="0.95"/>
+                </g>
+              ))}
+            </svg>
+          );
+        }
+        if (levelKey === "swing") {
+          return (
+            <svg viewBox="0 0 220 120" className="w-48 h-28 mx-auto opacity-95">
+              <g stroke="rgba(255,255,255,0.25)">
+                {Array.from({length:5}).map((_,i)=>(<line key={i} x1="0" y1={20+i*20} x2="220" y2={20+i*20}/>))}
+              </g>
+              <path d="M0 80 C20 40, 40 40, 60 80 S 100 120, 120 80 S 160 40, 180 80 S 220 120, 240 80" fill="none" stroke="#fff" strokeWidth="2.5"/>
+            </svg>
+          );
+        }
+        if (levelKey === "risk") {
+          return (
+            <svg viewBox="0 0 220 120" className="w-48 h-28 mx-auto opacity-95">
+              <g fill="none" stroke="#fff" strokeWidth="2">
+                <circle cx="50" cy="60" r="10"/><circle cx="110" cy="30" r="10"/><circle cx="170" cy="80" r="10"/>
+                <line x1="60" y1="55" x2="100" y2="35"/><line x1="60" y1="65" x2="160" y2="80"/><line x1="110" y1="40" x2="170" y2="70"/>
+              </g>
+            </svg>
+          );
+        }
+        return (
+          <svg viewBox="0 0 220 120" className="w-48 h-28 mx-auto opacity-95">
+            <g stroke="#fff" fill="none">
+              <polygon points="110,10 125,55 170,55 135,80 150,115 110,92 70,115 85,80 50,55 95,55" strokeWidth="2"/>
+              <circle cx="110" cy="10" r="3" fill="#fff"/>
+            </g>
+          </svg>
+        );
+      }
+
+      function App() {
+        const [name, setName] = useState("Chris Park");
+        const [difficulty, setDifficulty] = useState("standard");
+        const [shuffle, setShuffle] = useState(true);
+        const [step, setStep] = useState("intro");
+        const [cursor, setCursor] = useState(0);
+        const [answers, setAnswers] = useState(Array(QUESTION_BANK.length).fill(-1)); // -1: 미응답
+
+        const questions = useMemo(() => {
+          const base = [...QUESTION_BANK];
+          if (shuffle) {
+            for (let i = base.length - 1; i > 0; i--) {
+              const j = Math.floor(Math.random() * (i + 1));
+              [base[i], base[j]] = [base[j], base[i]];
+            }
+          }
+          return base;
+        }, [shuffle]);
+
+        const total = questions.length;
+        const correctCount = useMemo(
+          () => answers.reduce((acc, v, i) => (v === questions[i].a ? acc + 1 : acc), 0),
+          [answers, questions]
+        );
+        const progress = Math.round(((cursor + 1) / total) * 100);
+        const scorePct = Math.round((correctCount / total) * 100);
+        const level = levelOf(scorePct);
+
+        const cardRef = useRef(null);
+
+        async function downloadCard() {
+          if (!cardRef.current) return;
+          const dataUrl = await htmlToImage.toPng(cardRef.current, { pixelRatio: 2 });
+          const a = document.createElement("a");
+          a.href = dataUrl;
+          a.download = `${name || "trader"}-${level.key}.png`;
+          a.click();
+        }
+
+        async function shareResult() {
+          const url = new URL(window.location.href);
+          url.searchParams.set("n", encodeURIComponent(name));
+          url.searchParams.set("s", String(scorePct));
+          await navigator.clipboard.writeText(url.toString());
+          alert("링크를 클립보드에 복사했습니다. 결과를 공유하세요!");
+        }
+
+        return (
+          <div className="px-4 py-8">
+            <div className="mx-auto max-w-3xl">
+              <header className="mb-6 flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="size-9 rounded-2xl bg-gradient-to-br from-cyan-500 to-violet-600 grid place-items-center shadow-lg"><span>⚡</span></div>
+                  <h1 className="text-2xl font-semibold tracking-tight text-white">Crypto Trading Quiz</h1>
+                </div>
+                <div className="text-xs opacity-80 text-slate-300">Prove your edge.</div>
+              </header>
+
+              {step === "intro" && (
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 text-white">
+                  <div className="text-xl font-semibold mb-2">온라인 트레이딩 레벨 테스트</div>
+                  <p className="text-slate-300 text-sm leading-relaxed mb-4">펀딩·OI·온체인 기반 {total}문항. 점수에 따라 전용 카드를 발급합니다.</p>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <label className="space-y-2 block">
+                      <span className="text-white">이름(카드에 표시)</span>
+                      <input className="w-full rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-white" value={name} onChange={(e)=>setName(e.target.value)} placeholder="Your name"/>
+                    </label>
+                    <label className="space-y-2 block">
+                      <span className="text-white">난이도</span>
+                      <select className="w-full rounded-xl bg-slate-800 border border-slate-700 px-3 py-2 text-white" value={difficulty} onChange={(e)=>setDifficulty(e.target.value)}>
+                        <option value="standard">Standard</option>
+                        <option value="pro">Pro (해설 없이 결과만)</option>
+                      </select>
+                    </label>
+                    <label className="flex items-center gap-3">
+                      <input type="checkbox" checked={shuffle} onChange={(e)=>setShuffle(e.target.checked)} />
+                      <span className="text-white">문항 셔플</span>
+                    </label>
+                  </div>
+                  <div className="flex justify-end mt-4">
+                    <button className="rounded-xl bg-cyan-500 px-4 py-2 font-medium text-black" onClick={()=>setStep("quiz")}>시작하기 →</button>
+                  </div>
+                </div>
+              )}
+
+              {step === "quiz" && (
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 text-white">
+                  <div className="flex items-center justify-between text-white mb-2">
+                    <div>문항 {cursor+1} / {total}</div>
+                    <div className="text-sm text-slate-400">진행도 {progress}%</div>
+                  </div>
+                  <div className="w-full h-2 bg-slate-800 rounded-full mb-4"><div className="h-2 bg-cyan-500 rounded-full" style={{width: `${progress}%`}}/></div>
+                  <div className="space-y-4">
+                    <div className="text-lg font-medium leading-snug text-white">{questions[cursor].q}</div>
+                    <div className="grid gap-3">
+                      {questions[cursor].options.map((opt, idx)=>{
+                        const locked = answers[cursor] !== -1; // 첫 클릭 후 락
+                        const selected = answers[cursor] === idx;
+                        return (
+                          <button key={idx}
+                            disabled={locked && !selected}
+                            onClick={()=>{
+                              if (answers[cursor] !== -1) return; // 이미 선택됨 → 변경 금지
+                              const next=[...answers]; next[cursor]=idx; setAnswers(next);
+                            }}
+                            className={"w-full text-left rounded-2xl border px-4 py-3 transition " + (selected?"border-cyan-400 bg-cyan-400/20 text-white":"border-slate-700 hover:border-slate-600 hover:bg-slate-800/60 text-slate-200") + (locked && !selected?" opacity-60 cursor-not-allowed":"")}>
+                            {opt}
+                          </button>
+                        )
+                      })}
+                    </div>
+                    {difficulty === "standard" && answers[cursor] !== -1 && (
+                      <div className={"rounded-xl border px-4 py-3 text-sm " + (answers[cursor]===questions[cursor].a?"border-emerald-500/50 bg-emerald-500/10 text-emerald-200":"border-rose-500/50 bg-rose-500/10 text-rose-200")}>
+                        <div className="font-semibold">{answers[cursor]===questions[cursor].a?"정답!":"오답"}</div>
+                        <p className="mt-2 text-slate-300">{questions[cursor].explain}</p>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex items-center justify-between mt-4">
+                    <button className="px-3 py-2 rounded-xl border border-slate-700" onClick={()=>setCursor(c=>Math.max(0,c-1))}>← 이전</button>
+                    {cursor < total-1 ? (
+                      <button className="px-3 py-2 rounded-xl bg-cyan-500 text-black font-medium" onClick={()=>setCursor(c=>Math.min(total-1,c+1))} disabled={answers[cursor]===-1}>다음 →</button>
+                    ) : (
+                      <button className="px-3 py-2 rounded-xl bg-emerald-500 text-black font-medium" onClick={()=>setStep("result")} disabled={answers[cursor]===-1}>결과 보기</button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {step === "result" && (
+                <div className="grid gap-6 md:grid-cols-2">
+                  <div className="rounded-2xl border border-slate-800 bg-slate-900/80 p-6 text-white order-2 md:order-1">
+                    <div className="text-xl font-semibold mb-2">결과</div>
+                    <div className="text-5xl font-bold tracking-tight text-white">{scorePct}<span className="text-xl align-top">%</span></div>
+                    <div className="text-slate-300">정답 {correctCount} / {total}</div>
+                    <div className="text-lg font-medium">레벨: <span className={"bg-gradient-to-r bg-clip-text text-transparent " + level.gradient}>{level.label}</span></div>
+                    <div className="grid grid-cols-2 gap-3 pt-2">
+                      <button className="rounded-xl bg-white text-black px-3 py-2 font-medium" onClick={downloadCard}>카드 다운로드</button>
+                      <button className="rounded-xl border border-slate-700 px-3 py-2" onClick={shareResult}>결과 공유</button>
+                    </div>
+                    <div className="pt-2 text-sm text-slate-400">다시 도전? <button className="underline underline-offset-4" onClick={()=>{location.reload();}}>퀴즈 재시작</button></div>
+                  </div>
+
+                  <div className="order-1 md:order-2">
+                    <div ref={cardRef} className="mx-auto w-full max-w-sm rounded-3xl p-4 shadow-2xl bg-gradient-to-b from-slate-800 to-black border border-slate-700 text-white">
+                      <div className="rounded-2xl p-3 bg-gradient-to-br from-slate-900 to-slate-800 border border-slate-700 text-white">
+                        <div className="flex items-center justify-between rounded-xl px-3 py-2 bg-slate-900/70 border border-slate-700">
+                          <div className="font-semibold text-white">{name || "Anonymous"}</div>
+                          <div className="text-[10px] text-slate-400">© @ChrisPark_IC</div>
+                        </div>
+
+                        <div className={"mt-3 w-full rounded-xl border shadow-inner text-center text-white bg-gradient-to-br " + level.gradient + " p-4"}>
+                          <div className="text-2xl font-extrabold drop-shadow text-white">{level.label}</div>
+                          <div className="mt-1 text-xs opacity-90">Score {scorePct}%</div>
+                          <div className="mt-2">
+                            <LevelArt levelKey={level.key} />
+                          </div>
+                          <div className="mt-2 text-xs opacity-80">{level.flavor}</div>
+                        </div>
+
+                        <div className="mt-3 rounded-xl bg-slate-900/70 p-3 border border-slate-700 text-white">
+                          <div className="text-sm font-semibold">{level.label}</div>
+                          <p className="mt-1 text-xs text-slate-300 leading-relaxed">
+                            펀딩·OI·온체인 시그널을 기반으로 한 온라인 트레이딩 퀴즈 카드.
+                          </p>
+                          <div className="mt-2 text-[10px] text-slate-400">Season 1</div>
+                          <div className="mt-1 text-[10px] text-slate-500">© Twitter @ChrisPark_IC</div>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="mt-3 text-center text-xs text-slate-400">이미지는 자동 생성되며 상업적 보증은 없습니다.</div>
+                  </div>
+                </div>
+              )}
+
+              <footer className="mt-10 text-center text-xs text-slate-500">© {new Date().getFullYear()} Trading Quiz — Built by Chris Park (@ChrisPark_IC)</footer>
+            </div>
+          </div>
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(<App />);
+    </script>
+  </body>
+</html>
